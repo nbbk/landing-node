@@ -2196,6 +2196,28 @@ detect_existing() {
 }
 
 
+# ---------- 日志上限（防爆盘：journald） ----------
+# journald 默认能用到磁盘 10%（20G 盘就是 2G）；本机 node-agent 与系统日志都走 journald。
+# docker 容器日志不用这里管：compose 里每个服务都已限 10m x 3 份。
+# 与 relay-node 的 panel-install.sh 里 setup_log_limits 的第 2) 步同一份逻辑（两边改动要同步）。
+setup_journald_limit() {
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    local jc="/etc/systemd/journald.conf"
+    if grep -Eq '^[[:space:]]*SystemMaxUse=' "$jc" 2>/dev/null; then
+      echo "journald 上限已配过（$jc 里已有 SystemMaxUse），不动。"
+    elif [ "$DRY_RUN" = "1" ]; then
+      echo "[dry-run] 会在 $jc 末尾加 [Journal] SystemMaxUse=100M，并重启 systemd-journald、跑 journalctl --vacuum-size=100M"
+    else
+      printf '\n[Journal]\nSystemMaxUse=100M\n' >> "$jc"
+      systemctl restart systemd-journald 2>/dev/null || true
+      journalctl --vacuum-size=100M >/dev/null 2>&1 || true
+      echo "journald 上限已设为 100M（旧日志已按 100M 清过一次）。"
+    fi
+  else
+    echo "本机没有 systemd，跳过 journald 上限。"
+  fi
+}
+
 # ================= 主流程 =================
 # --add-node / --del-node：按已安装的核心走（先迁移旧版单节点，再按注册表定核心）
 if [ "$MODE" = "add" ] || [ "$MODE" = "del" ]; then
@@ -2436,6 +2458,10 @@ fi
 
 section "7/7 写入配置并启动"
 deploy_node fresh
+# 日志上限（防爆盘：journald 封顶 100M；重跑也走同一逻辑，函数内已配过的不动、幂等）
+echo ""
+echo "设置日志上限（防爆盘：journald 封顶 100M）..."
+setup_journald_limit
 echo ""
 echo "下一步：运行 bash check.sh 做泄漏自检，再按 README 配手机端。"
 
